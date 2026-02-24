@@ -1,4 +1,4 @@
-# Data Dictionary — Cairo 3A Poultry Dataset
+# Data Dictionary
 
 74,354 rows × 65 columns | 50 farms | 150 houses | 1,905 flocks | Jan 2023 – Dec 2024
 
