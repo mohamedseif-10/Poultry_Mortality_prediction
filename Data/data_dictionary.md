@@ -48,9 +48,9 @@ One row = one day in one flock's cycle.
 | daily_culls | int | Sick birds actively removed today (underreported on Fridays/Ramadan) |
 | cumulative_deaths | int | Total deaths from Day 1 to today |
 | cumulative_culls | int | Total culls from Day 1 to today |
-| daily_mortality_pct | float | daily_deaths / placement_count × 100 |
+| **daily_mortality_pct** | float | **daily_deaths / placement_count × 100 — current regression target** |
 | cumulative_mortality_pct | float | cumulative_deaths / placement_count × 100 |
-| **mortality_spike** | int | **1 if daily_mortality_pct > 0.30%, else 0 — main classification target** |
+| mortality_spike | int | 1 if daily_mortality_pct > 0.30%, else 0 — derived from target, not used as feature |
 
 ---
 
