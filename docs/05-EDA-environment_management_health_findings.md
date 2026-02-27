@@ -7,7 +7,7 @@
 | 1 | **House type is the strongest structural predictor** — open-sided houses have 2.4× the spike rate of tunnel-ventilated | **+23 pp** spike rate (open vs tunnel) | Keep `house_type` |
 | 2 | **Litter condition is a valid but modest predictor (Simpson's paradox resolved)** — naive chart shows good > wet; age-controlled analysis reverses it | **+5.6 pp** (wet vs good, age-controlled) | Keep `litter_condition`, forward-fill weekly gaps |
 | 3 | **Temperature is the dominant environmental driver** — spike-day inside temps shift ~3°C higher; aligns with summer mortality crisis | Clear distribution shift | Keep `temp_inside_avg_c`, engineer `temp_deviation` |
-| 4 | **Feed & water consumption are age-confounded** — dramatic spike/no-spike differences vanish once you account for age (young birds eat/drink less AND die more) | Confounded | Keep raw features; trees handle the interaction |
+| 4 | **Feed consumption has genuine within-age signal** — naive 50g+ gap is mostly age confound, but age-stratified analysis reveals real −6 to −17g drop on spike days across ALL age brackets | **−6 to −17g** | Keep `feed_per_bird_g` |
 | 5 | **Vaccination stress is real but brief** — spike rate +5 pp on vaccine days (first 2 weeks overlap) | **+5 pp** | Engineer `days_since_last_vaccine` |
 | 6 | **Antibiotics are reactive, not preventive** — spike rate nearly identical with/without antibiotics (9% of days) | ~0 pp | Keep `antibiotic_given` as reactive signal |
 | 7 | **Farm-level variation is large** — worst farm 42.7% spike rate vs best 17.0% (2.5× ratio) | **25 pp** spread | Keep `farm_id` |
@@ -119,17 +119,37 @@ All 5 hatcheries show nearly identical spike rates (~26–29%) and DOC quality s
 
 ## 3. Feed, Water & Weight Analysis
 
-### 3.1 Weight Growth Curve vs Hubbard Standard
+### 3.1 Average Bird Weight Growth Curve vs Hubbard Standard
 
-Actual average flock weight tracks the Hubbard breed standard closely from day 1 (~40g) through day 30 (~1,400g). After day 35, **variance explodes** — the ±1 std dev band widens dramatically, with some flocks reaching 5,000g+ while others collapse below 500g.
+> **Clarification:** `avg_weight_g` is the **average weight per bird** (grams), not total flock weight. This is confirmed by the value range: 35g at day 1 = a day-old chick.
+
+With outliers capped at P99 (2,110g), actual average bird weight tracks the Hubbard breed standard closely from day 1 (~40g) through day 40 (~1,970g standard). The ±1 std dev band remains tight once outliers are removed — the "variance explosion" seen in the original uncapped chart was largely driven by data entry errors.
 
 | Metric | Value |
 |--------|-------|
 | Weighing days in dataset | 13,335 (17.9% of rows) |
-| Weight range | 35g – 20,740g |
-| Data quality issue | ~1% data entry errors (per data dictionary); max 20,740g is clearly erroneous for a ~40-day broiler |
+| Raw weight range | 35g – 20,740g |
+| P99 | 2,110g (Hubbard standard max = 2,100g) |
+| Outliers > P99 | 127 rows (0.95%) — all data entry errors |
+| Hubbard standard at day 40 | 1,970g |
 
-**Senior insight:** The late-cycle variance explosion reflects (a) genuine divergence between well-managed and poorly-managed flocks, (b) weighing methodology inconsistency (not all birds are weighed), and (c) the known data entry errors. Weight-related features need outlier capping during feature engineering. The 20,740g max (~46 lbs) is physiologically impossible for any broiler — cap at the 99th percentile or ~5,000g to remove gross errors while preserving legitimate heavy-flock data.
+**Data quality:** The P99 aligns almost exactly with the Hubbard max (2,100g vs 2,110g), confirming that values above P99 are errors. The outlier scatter plot shows errors occur across all age brackets but concentrate in 36–45d (67 of 127 rows). The error pattern suggests a factor-of-10 recording error (e.g., entering 20,740g instead of 2,074g).
+
+**Decision:** Cap `avg_weight_g` at P99 (2,110g) during feature engineering — this is more precise than the earlier ~5,000g estimate and aligns with the biological ceiling.
+
+### 3.1b Weight Deviation from Breed Standard
+
+The ratio `avg_weight_g / hubbard_standard_weight_g` measures how each flock's growth tracks the breed reference:
+
+| Metric | Value |
+|--------|-------|
+| Mean ratio | 0.953 (flocks average ~5% below standard) |
+| Spike days ratio | 0.946 |
+| No-spike days ratio | 0.957 |
+
+After age-aware outlier capping (both raw weight P99 and ratio P99), spike days show **lower** weight ratios — underweight flocks are more vulnerable to mortality spikes. The ratio stays relatively stable across age (~0.95) with tight variance after day 10.
+
+**Decision:** Engineer `weight_vs_standard = avg_weight_g / hubbard_standard_weight_g` — confirmed as a useful growth quality indicator with genuine spike signal.
 
 ### 3.2 Feed & Water Consumption by Age
 
@@ -147,18 +167,54 @@ Actual average flock weight tracks the Hubbard breed standard closely from day 1
 
 A dropping W:F ratio is a classic early-warning indicator in poultry — birds reduce water intake before clinical signs appear. The distribution overlap between spike and no-spike is substantial, so the signal is weak in isolation, but it's a well-established domain feature.
 
+### 3.4 Current-Cycle FCR (Feed Conversion Ratio)
+
+FCR-to-date = cumulative feed (kg) / total live weight (kg). Computed on weighing days only.
+
+| Metric | Value |
+|--------|-------|
+| Median FCR | 1.84 |
+| Mean FCR | 1.63 |
+| Industry benchmark | ~2.0 at slaughter |
+
+**FCR by age:** Starts near 0.3 (day 1) and rises steadily to ~2.3 by day 40+ — expected, as cumulative feed grows faster than weight gain.
+
+**FCR by breed:** All three breeds (Cobb_500, Hubbard, Ross_308) show nearly identical FCR curves — no breed differentiation at the FCR level.
+
+**FCR by spike status (age > 14d):** Spike days show slightly higher FCR (median 2.20 vs 2.14 for no-spike). Higher FCR = worse feed efficiency = stressed/sick flock. The signal is modest but directionally correct.
+
+**Decision:** Engineer `fcr_to_date` during feature engineering. Only available on weighing days (17.9%), but it's a direct measure of flock health quality.
+
+### 3.5 Feed per Bird — Age-Stratified Spike Analysis (Confound Control)
+
+Naive box plots showed a ~50g spike/no-spike gap in feed per bird. Age-stratified analysis reveals the truth:
+
+| Age Bracket | No-Spike Median | Spike Median | Δ |
+|-------------|----------------|-------------|---|
+| 0–7d | 28.0g | 22.0g | **−6.0g** |
+| 8–14d | 63.4g | 57.4g | **−6.0g** |
+| 15–21d | 108.0g | 95.7g | **−12.3g** |
+| 22–28d | 140.9g | 124.0g | **−16.9g** |
+| 29–35d | 163.1g | 150.2g | **−12.9g** |
+| 36–45d | 174.4g | 162.7g | **−11.7g** |
+
+**Key finding:** Spike days have **lower feed per bird in ALL 6 age brackets** (−6 to −17g). This is a **real biological signal** — sick/stressed birds reduce food intake before clinical signs appear. The naive 50g+ gap is mostly age confounding, but a genuine within-age signal of 6–17g persists.
+
+**Senior insight:** This finding upgrades `feed_per_bird_g` from "confounded signal" to "genuine predictor with independent value." The age-stratified analysis proves feed intake drops aren't just because young birds eat less — they drop *within each age bracket* on spike days.
+
 ### Feed/Water/Weight Decisions
 
 | Feature | Action | Reason |
 |---------|--------|--------|
-| `feed_per_bird_g` | **Keep** | Strong age proxy with independent nutritional signal |
+| `feed_per_bird_g` | **Keep** | Real within-age signal: −6 to −17g on spike days; sick birds eat less |
 | `water_consumed_L` | **Keep** | House-level consumption; scales with flock health |
-| `avg_weight_g` | **Keep (with outlier capping)** | Cap at 99th percentile or ~5,000g to remove gross entry errors; only 17.9% of days have weighing |
+| `avg_weight_g` | **Keep (with P99 capping at 2,110g)** | Only 17.9% of days have weighing; outliers above P99 are data entry errors |
 | `feed_phase` | **Keep** | Clean categorical; encodes lifecycle stage |
 | `water_feed_ratio` | **Engineer** | `water_consumed_L / feed_consumed_kg` — early-warning signal per domain knowledge |
-| `weight_vs_standard` | **Consider engineering** | `avg_weight_g / hubbard_standard_weight_g` — deviation from expected growth |
+| `weight_vs_standard` | **Engineer** | `avg_weight_g / hubbard_standard_weight_g` — confirmed: spike days show lower ratio (0.946 vs 0.957) |
+| `fcr_to_date` | **Engineer** | `cumulative_feed_kg / total_live_weight_kg` — spike days show higher FCR (worse efficiency) |
 
-> **Important confound warning:** Feed per bird and water consumption both have large spike/no-spike differences in naive box plots because spike days concentrate in early life (age 0–10d) when consumption is lowest. This is the **same age confounding** as litter condition. Tree models handle this because they see `age_days`, but linear models would need explicit interaction terms.
+> **Confound warning (updated):** The naive 50g+ feed gap is mostly age confounding, but a genuine 6–17g within-age signal persists. Feed per bird carries **independent predictive value** beyond being an age proxy. Tree models will capture this naturally; for linear models, include `age_days` interaction terms.
 
 ---
 
@@ -370,7 +426,7 @@ The stocking density distributions for spike vs no-spike **overlap almost comple
 | `humidity_inside_pct` | **Moderate** | Compounds heat stress |
 | `ammonia_ppm` | **Moderate** | Respiratory pathway; right-shifted on spike days |
 | `litter_condition` | **Moderate** | +5.6 pp (wet vs good) after age control; forward-fill required |
-| `feed_per_bird_g` | **Moderate** | Confounded with age but carries independent nutritional signal |
+| `feed_per_bird_g` | **Strong** | Real within-age signal (−6 to −17g on spike days); upgraded from Moderate |
 | `water_consumed_L` | **Moderate** | Same confound caveat |
 | `antibiotic_given` | **Moderate** | Reactive signal — "treatment started" indicator |
 | `prev_cycle_mortality_pct` | **Moderate** | House-level "memory" |
@@ -392,7 +448,8 @@ The stocking density distributions for spike vs no-spike **overlap almost comple
 |---------|---------|-----------|
 | `temp_deviation` | `temp_inside_avg_c − target_temp_for_age_c` | House control quality (how far from optimal?) |
 | `water_feed_ratio` | `water_consumed_L / feed_consumed_kg` | Early-warning signal per domain knowledge |
-| `weight_vs_standard` | `avg_weight_g / hubbard_standard_weight_g` | Growth deviation — underweight = stressed flock |
+| `weight_vs_standard` | `avg_weight_g / hubbard_standard_weight_g` | Confirmed: spike ratio 0.946 vs no-spike 0.957 — underweight flocks spike more |
+| `fcr_to_date` | `cumsum(feed_consumed_kg) / (avg_weight_g × flock_size / 1000)` | Higher FCR on spike days (2.20 vs 2.14 median); only on weighing days |
 | `litter_condition_ffill` | Forward-fill within flock | Fills weekly gaps (82% NaN → 0% — 100% coverage achieved) |
 
 ### Features NOT to Create
@@ -406,7 +463,7 @@ The stocking density distributions for spike vs no-spike **overlap almost comple
 
 | Issue | Action |
 |-------|--------|
-| `avg_weight_g` max = 20,740g | Cap at 99th percentile or ~5,000g (flock averages above 5 kg are physiologically impossible; 3,000–3,500g is typical at day 40 but top-performing male-heavy flocks in extended cycles can legitimately exceed 3,500g) |
+| `avg_weight_g` max = 20,740g | Cap at P99 = 2,110g (aligns with Hubbard max 2,100g; 127 outlier rows = 0.95%) |
 | `litter_condition` 82% NaN | Forward-fill within flock — achieves 100% coverage (every flock has at least one observation before forward-fill carries it) |
 | `prev_cycle_mortality_pct` 7.9% NaN | Impute with dataset median (first cycle houses) |
 | Weighing days = 17.9% | Accept sparsity; weight features are only available on weigh days |

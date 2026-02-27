@@ -2,3 +2,7 @@ venv
 .vsc
 __pycache__
 .ipynb_checkpoints
+
+# Private planning docs
+docs/_PLAN-*
+_PLAN-pipeline_architecture.md
